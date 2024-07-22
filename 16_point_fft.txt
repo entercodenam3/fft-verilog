@@ -1,0 +1,1058 @@
+`timescale 1ps / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 05.03.2023 22:38:38
+// Design Name: 
+// Module Name: 16point_fft
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+module fft(
+
+  input  wire        clk,       // clock
+  input  wire        rst_n,     // reset
+  input  wire [33:0] data_in,   // input from pin
+  output wire [33:0] data_out   // output to pin
+
+  );
+
+  wire        mux_flag, demux_flag, s_p_flag;  // seems need a signal called ps_s_flag. Refer warning 02.
+  wire[2:0]   rotation;
+  wire[135:0] data_1, data_2, data_3, data_4;
+
+  ctrl ctrl0(
+    .clk(clk),                // input from top
+    .rst_n(rst_n),            // input from top
+    .s_p_flag_in(s_p_flag),   // input from s_p
+    .mux_flag(mux_flag),      // output to mux
+    .rotation(rotation),      // output to butterfly
+    .demux_flag(demux_flag)   // output to p_s and reg1
+  );
+
+  s_p s_p0(
+    .clk(clk),                // input from top
+    .rst_n(rst_n),            // input from top
+    .data_in_1(data_in),      // input from top
+    .data_out_1(data_1),      // output to mux
+    .s_p_flag_out(s_p_flag)   // output to ctrl
+  );
+
+  mux mux0(
+    .mux_flag(mux_flag),      // input from ctrl 
+    .clk(clk),
+    .rst_n(rst_n),
+    .data_in_2(data_1),       // input from s_p
+    .data_in_1(data_2),       // input from reg1
+    .data_in_3(data_4),
+    .data_out(data_3)         // output to butterfly
+  );
+
+  butterfly butterfly0(
+    .calc_in(data_3),         // input from mux
+    .rotation(rotation),      // input from ctrl
+    .calc_out(data_4)         // output to demux
+  );
+
+  reg1 reg10(
+    .clk(clk),                // input from top
+    .rst_n(rst_n),            // input from top
+    .data_in_2(data_4),
+    .data_out_2(data_2),
+    .reg_datain_flag(demux_flag)
+  );
+
+  p_s p_s0(
+    .clk(clk),                // input from top
+    .rst_n(rst_n),            // input from top
+    .p_s_flag_in(demux_flag), // input from ctrl  #* Warning 02: Please check no p_s_flag in ctrl *#
+    .data_in_3(data_4),       // input from demux
+    .data_out_3(data_out)     // output to top
+  );
+  
+endmodule
+module ctrl(
+  input  wire       clk,
+  input  wire       rst_n,
+  input  wire       s_p_flag_in,  // s_p_flag_in equals to 1 when s_p module has 13 elements, else equals to 0
+  output reg        mux_flag,
+  output reg  [2:0] rotation,
+  output reg        demux_flag
+  );
+
+  parameter STOP = 3'b0;
+  parameter MUX_IDLE = 1'b0;
+  parameter ROT_IDLE = 3'b0;
+  parameter DEMUX_IDLE = 1'b0;
+  parameter S_P_SEL_0 = 1'b0;
+  parameter S_P_SEL_1 = 1'b0;
+  parameter S_P_SEL_2 = 1'b0;
+  parameter S_P_SEL_3 = 1'b0;
+  parameter REG_SEL_0 = 1'b1;
+  parameter REG_SEL_1 = 1'b1;
+  parameter REG_SEL_2 = 1'b1;
+  parameter REG_SEL_3 = 1'b1;
+  parameter P_S_SEL_0 = 1'b0;
+  parameter P_S_SEL_1 = 1'b0;
+  parameter P_S_SEL_2 = 1'b0;
+  parameter P_S_SEL_3 = 1'b0;
+
+  reg[2:0] core_tick;  // count how many sequential logic
+
+// This always part controls signal core_tick. 
+  always @ ( posedge clk or negedge rst_n) begin
+    if ( !rst_n )
+      core_tick <= STOP; // 3 bits
+    else if ( core_tick == STOP ) begin
+      case ( s_p_flag_in )
+        1'b0: core_tick <= STOP;
+        1'b1: core_tick <= core_tick + 1;
+      endcase
+    end else
+      core_tick <= core_tick + 1;
+  end
+
+// This always part controls signal mux_flag.
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      mux_flag <= MUX_IDLE;
+    else begin
+      case ( core_tick )
+        3'b000: mux_flag <= S_P_SEL_0;  // Comment here to lower power consumption but no use
+        3'b001: mux_flag <= S_P_SEL_1;  // 15
+        3'b010: mux_flag <= S_P_SEL_2;  // 16
+        3'b011: mux_flag <= S_P_SEL_3;  // 17
+        3'b100: mux_flag <= REG_SEL_0;  // 18
+        3'b101: mux_flag <= REG_SEL_1;  // 19
+        3'b110: mux_flag <= REG_SEL_2;  // 20
+        3'b111: mux_flag <= REG_SEL_3;  // 21
+        // If MUX/DEMUX has 3 OPTIONS (SP/PS, REG, IDLE), but no use to lower power consumption because still need compute IDLE
+      endcase
+    end
+  end
+
+// This always part controls signal demux_flag.
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      demux_flag <= DEMUX_IDLE;
+    else begin
+      case ( core_tick )
+        3'b000: demux_flag <= REG_SEL_0;  // Comment here to lower power consumption but no use
+        3'b001: demux_flag <= REG_SEL_1;  // 15
+        3'b010: demux_flag <= REG_SEL_2;  // 16
+        3'b011: demux_flag <= REG_SEL_3;  // 17
+        3'b100: demux_flag <= P_S_SEL_0;  // 18
+        3'b101: demux_flag <= P_S_SEL_1;  // 19
+        3'b110: demux_flag <= P_S_SEL_2;  // 20
+        3'b111: demux_flag <= P_S_SEL_3;  // 21
+        // If MUX/DEMUX has 3 OPTIONS (SP/PS, REG, IDLE), but no use to lower power consumption because still need compute IDLE
+      endcase
+    end
+  end
+
+// This always part controls signal rotation.
+always @ ( posedge clk or negedge rst_n ) begin
+  if ( !rst_n )
+    rotation <= ROT_IDLE; 
+  else
+    rotation <=core_tick;
+end
+    
+endmodule
+module butterfly(
+  input  wire [135:0] calc_in,  // The 4 numbers which need to be calculated. Format: in4(Re,Im), in3(Re,Im), in2(Re,Im), in1(Re,Im)
+  input  wire [2:0]   rotation, // Number of each butterfly computation (8 in total)
+  output wire [135:0] calc_out  // The 4 output numbers. Format: out4(Re,Im), out3(Re,Im), out2(Re,Im), out1(Re,Im)
+  );
+
+  parameter para0000 = 8'b00000000;  //  0.0000. sin(0pi/8) = sin(8pi/8) = cos(4pi/8) = - cos(4pi/8)
+  parameter para3827 = 8'b00110001;  //  0.3827. sin(1pi/8) = sin(7pi/8) = cos(3pi/8) = - cos(5pi/8) 0.0110000111111000101000001001000000101101111000000001
+  parameter parn3827 = 8'b11001111;  // -0.3827. sin(1pi/8) = sin(7pi/8) = cos(3pi/8) = - cos(5pi/8)
+  parameter para7071 = 8'b01011010;  //  0.7071. sin(2pi/8) = sin(6pi/8) = cos(2pi/8) = - cos(6pi/8) 0.1011010100000100100000010110111100000000011010001110
+  parameter parn7071 = 8'b10100110;  // -0.7071. sin(2pi/8) = sin(6pi/8) = cos(2pi/8) = - cos(6pi/8)
+  parameter para9239 = 8'b01110110;  //  0.9239. sin(3pi/8) = sin(5pi/8) = cos(1pi/8) = - cos(7pi/8) 0.1110110010000100101101011101110011000110001111110001
+  parameter parn9239 = 8'b10001010;  // -0.9239. sin(3pi/8) = sin(5pi/8) = cos(1pi/8) = - cos(7pi/8)
+  parameter para1111 = 8'b01111111;  //  1.0000. sin(4pi/8) = sin(4pi/8) = cos(0pi/8) = - cos(8pi/8)
+  parameter parn1111 = 8'b10000001;  // -1.0000.
+  
+  reg  signed [7:0]  rotation_factor1_real;  // For input B
+  reg  signed [7:0]  rotation_factor1_imag;  // For input B
+  reg  signed [7:0]  rotation_factor2_real;  // For input C
+  reg  signed [7:0]  rotation_factor2_imag;  // For input C
+  reg  signed [7:0]  rotation_factor3_real;  // For input D
+  reg  signed [7:0]  rotation_factor3_imag;  // For input D
+
+  wire signed [7:0]  in_8bit_1_real, in_8bit_1_imag;
+  wire signed [7:0]  in_8bit_2_real, in_8bit_2_imag;
+  wire signed [7:0]  in_8bit_3_real, in_8bit_3_imag;
+
+  wire signed [33:0] temp_0, temp_1, temp_2, temp_3;
+
+  wire signed [16:0] temp_0_real, temp_0_imag;
+  wire signed [16:0] temp_1_real, temp_1_imag;
+  wire signed [16:0] temp_2_real, temp_2_imag;
+  wire signed [16:0] temp_3_real, temp_3_imag;
+
+  wire signed [16:0] in_17bit_0_real, in_17bit_0_imag;
+  wire signed [16:0] in_17bit_1_real, in_17bit_1_imag;
+  wire signed [16:0] in_17bit_2_real, in_17bit_2_imag;
+  wire signed [16:0] in_17bit_3_real, in_17bit_3_imag;
+
+  wire signed [16:0] out_0_real, out_0_imag;
+  wire signed [16:0] out_1_real, out_1_imag;
+  wire signed [16:0] out_2_real, out_2_imag;
+  wire signed [16:0] out_3_real, out_3_imag;
+
+  wire signed [16:0] temp_2_1_real, temp_2_2_real, temp_2_1_imag, temp_2_2_imag;
+  wire signed [16:0] temp_3_1_real, temp_3_2_real, temp_3_1_imag, temp_3_2_imag;
+  wire signed [16:0] temp_4_1_real, temp_4_2_real, temp_4_1_imag, temp_4_2_imag;
+
+//****************************** The following are state machines *****************************
+
+// This always part controls signal rotation_factor1_real.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor1_real = para1111;
+      3'b001: rotation_factor1_real = para1111;
+      3'b010: rotation_factor1_real = para1111;
+      3'b011: rotation_factor1_real = para1111;
+      3'b100: rotation_factor1_real = para1111;  //   cos(0)     =   1        W_16^0
+      3'b101: rotation_factor1_real = para9239;  //   cos(pi/8)  =   0.9239   W_16^1
+      3'b110: rotation_factor1_real = para7071;  //   cos(pi/4)  =   0.7071   W_16^2
+      3'b111: rotation_factor1_real = para3827;  //   cos(3pi/8) =   0.3827   W_16^3
+    endcase
+  end
+
+// This always part controls signal rotation_factor1_imag.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor1_imag = para0000;
+      3'b001: rotation_factor1_imag = para0000;
+      3'b010: rotation_factor1_imag = para0000;
+      3'b011: rotation_factor1_imag = para0000;
+      3'b100: rotation_factor1_imag = para0000;  // - sin(0)     =   0        W_16^0
+      3'b101: rotation_factor1_imag = parn3827;  // - sin(pi/8)  = - 0.3827   W_16^1
+      3'b110: rotation_factor1_imag = parn7071;  // - sin(pi/4)  = - 0.7071   W_16^2
+      3'b111: rotation_factor1_imag = parn9239;  // - sin(3pi/8) = - 0.9239   W_16^3
+    endcase
+  end
+
+// This always part controls signal rotation_factor2_real.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor2_real = para1111;
+      3'b001: rotation_factor2_real = para1111;
+      3'b010: rotation_factor2_real = para1111;
+      3'b011: rotation_factor2_real = para1111;
+      3'b100: rotation_factor2_real = para1111;  //   cos(0)     =   1        W_16^0
+      3'b101: rotation_factor2_real = para7071;  //   cos(pi/4)  =   0.7071   W_16^2
+      3'b110: rotation_factor2_real = para0000;  //   cos(pi/2)  =   0        W_16^4
+      3'b111: rotation_factor2_real = parn7071;  //   cos(3pi/4) = - 0.7071   W_16^6
+    endcase
+  end
+
+// This always part controls signal rotation_factor2_imag.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor2_imag = para0000;
+      3'b001: rotation_factor2_imag = para0000;
+      3'b010: rotation_factor2_imag = para0000;
+      3'b011: rotation_factor2_imag = para0000;
+      3'b100: rotation_factor2_imag = para0000;  // - sin(0)     =   0        W_16^0
+      3'b101: rotation_factor2_imag = parn7071;  // - sin(pi/8)  = - 0.7071   W_16^2
+      3'b110: rotation_factor2_imag = parn1111;  // - sin(pi/4)  = - 1        W_16^4
+      3'b111: rotation_factor2_imag = parn7071;  // - sin(3pi/8) = - 0.7071   W_16^6
+    endcase
+  end
+
+// This always part controls signal rotation_factor3_real.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor3_real = para1111;
+      3'b001: rotation_factor3_real = para1111;
+      3'b010: rotation_factor3_real = para1111;
+      3'b011: rotation_factor3_real = para1111;
+      3'b100: rotation_factor3_real = para1111;  //   cos(0)     =   1        W_16^0
+      3'b101: rotation_factor3_real = para3827;  //   cos(3pi/8) =   0.7071   W_16^3
+      3'b110: rotation_factor3_real = parn7071;  //   cos(6pi/8) =   0        W_16^6
+      3'b111: rotation_factor3_real = parn9239;  //   cos(9pi/8) = - 0.7071   W_16^9
+    endcase
+  end
+
+// This always part controls signal rotation_factor3_imag.
+  always @ ( rotation ) begin
+    case ( rotation )
+      3'b000: rotation_factor3_imag = para0000;
+      3'b001: rotation_factor3_imag = para0000;
+      3'b010: rotation_factor3_imag = para0000;
+      3'b011: rotation_factor3_imag = para0000;
+      3'b100: rotation_factor3_imag = para0000;  // - sin(0)     = - 0        W_16^0
+      3'b101: rotation_factor3_imag = parn9239;  // - sin(3pi/8) = - 0.7071   W_16^3
+      3'b110: rotation_factor3_imag = parn7071;  // - sin(6pi/8) = - 0.1      W_16^6
+      3'b111: rotation_factor3_imag = para3827;  // - sin(9pi/8) =   0.7071   W_16^9
+    endcase
+  end
+
+//****************************** The following are instantiations *****************************
+
+  multi16 multiBRR( .in_17bit(in_17bit_1_real),
+                    .in_8bit(in_8bit_1_real),
+                    .out(temp_2_1_real)
+                  );
+
+  multi16 multiBII( .in_17bit(in_17bit_1_imag),
+                    .in_8bit(in_8bit_1_imag),
+                    .out(temp_2_2_real)
+                  );
+
+  multi16 multiBRI( .in_17bit(in_17bit_1_real),
+                    .in_8bit(in_8bit_1_imag),
+                    .out(temp_2_1_imag)
+                  );1
+
+  multi16 multiBIR( .in_17bit(in_17bit_1_imag),
+                    .in_8bit(in_8bit_1_real),
+                    .out(temp_2_2_imag)
+                  );
+  
+//************************************************************************************************
+
+  multi16 multiCRR( .in_17bit(in_17bit_2_real),
+                    .in_8bit(in_8bit_2_real),
+                    .out(temp_3_1_real)
+                  );
+                  
+  multi16 multiCII( .in_17bit(in_17bit_2_imag),
+                    .in_8bit(in_8bit_2_imag),
+                    .out(temp_3_2_real)
+                  );
+
+  multi16 multiCRI( .in_17bit(in_17bit_2_real),
+                    .in_8bit(in_8bit_2_imag),
+                    .out(temp_3_1_imag)
+                  );
+
+  multi16 multiCIR( .in_17bit(in_17bit_2_imag),
+                    .in_8bit(in_8bit_2_real),
+                    .out(temp_3_2_imag)
+                  );
+
+//************************************************************************************************                
+
+  multi16 multiDRR( .in_17bit(in_17bit_3_real),
+                    .in_8bit(in_8bit_3_real),
+                    .out(temp_4_1_real)
+                  );
+
+  multi16 multiDII( .in_17bit(in_17bit_3_imag),
+                    .in_8bit(in_8bit_3_imag),
+                    .out(temp_4_2_real)
+                  );
+
+  multi16 multiDRI( .in_17bit(in_17bit_3_real),
+                    .in_8bit(in_8bit_3_imag),
+                    .out(temp_4_1_imag)
+                  );
+
+  multi16 multiDIR( .in_17bit(in_17bit_3_imag),
+                    .in_8bit(in_8bit_3_real),
+                    .out(temp_4_2_imag)
+                  );
+
+//**************************** The following are assign statements ****************************
+
+  assign in_17bit_0_real = calc_in[33:17];         // A (real)
+  assign in_17bit_0_imag = calc_in[16:0];          // A (imag)
+
+  assign in_8bit_1_real  = rotation_factor1_real;  // rotation factor for B (real)
+  assign in_8bit_1_imag  = rotation_factor1_imag;  // rotation factor for B (imag)
+  assign in_17bit_1_real = calc_in[67:51];         // B (real) 
+  assign in_17bit_1_imag = calc_in[50:34];         // B (imag) 
+
+  assign in_8bit_2_real  = rotation_factor2_real;  // rotation factor for C (real)
+  assign in_8bit_2_imag  = rotation_factor2_imag;  // rotation factor for C (imag)
+  assign in_17bit_2_real = calc_in[101:85];        // C (real) 
+  assign in_17bit_2_imag = calc_in[84:68];         // C (imag) 
+
+  assign in_8bit_3_real  = rotation_factor3_real;  // rotation factor for D (real)
+  assign in_8bit_3_imag  = rotation_factor3_imag;  // rotation factor for D (imag)
+  assign in_17bit_3_real = calc_in[135:119];       // D (real)  
+  assign in_17bit_3_imag = calc_in[118:102];       // D (imag) 
+
+//************************************************************************************************       
+
+  assign temp_0_real = {in_17bit_0_real[16], in_17bit_0_real};  // A real
+  assign temp_0_imag = {in_17bit_0_imag[16], in_17bit_0_imag};  // A imag
+
+  assign temp_1_real = temp_2_1_real - temp_2_2_real;  //B * W^P     real
+  assign temp_1_imag = temp_2_1_imag + temp_2_2_imag;  //B * W^P     imag
+
+  assign temp_2_real = temp_3_1_real - temp_3_2_real;  //C * W^{2p}  real
+  assign temp_2_imag = temp_3_1_imag + temp_3_2_imag;  //C * W^{2p}  imag
+
+  assign temp_3_real = temp_4_1_real - temp_4_2_real;  //D * W^{3P}  real
+  assign temp_3_imag = temp_4_1_imag + temp_4_2_imag;  //D * W^{3P}  imag
+
+
+  assign temp_0 = {temp_0_real,temp_0_imag};   // A
+  assign temp_1 = {temp_1_real, temp_1_imag};  // B * Wp
+  assign temp_2 = {temp_2_real, temp_2_imag};  // C * W2p
+  assign temp_3 = {temp_3_real, temp_3_imag};  // D * W3p
+
+//************************************************************************************************       
+
+  assign out_0_real = temp_0_real + temp_1_real + temp_2_real + temp_3_real;
+  assign out_0_imag = temp_0_imag + temp_1_imag + temp_2_imag + temp_3_imag;
+
+  assign out_1_real = temp_0_real - temp_1_real + temp_2_real - temp_3_real;
+  assign out_1_imag = temp_0_imag - temp_1_imag + temp_2_imag - temp_3_imag;
+
+  assign out_2_real = temp_0_real - temp_1_imag - temp_2_real + temp_3_imag;
+  assign out_2_imag = temp_0_imag + temp_1_real - temp_2_imag - temp_3_real;
+  assign out_3_real = temp_0_real + temp_1_imag - temp_2_real - temp_3_imag;
+  assign out_3_imag = temp_0_imag - temp_1_real - temp_2_imag + temp_3_real;
+
+  assign calc_out = { out_2_real, out_2_imag, 
+                      out_1_real, out_1_imag,
+                      out_3_real, out_3_imag,
+                      out_0_real, out_0_imag };
+
+endmodule
+module multi16(
+
+  input  wire [16:0] in_17bit,  // 17-bit input  data
+  input  wire [7:0]  in_8bit,   // 8-bit  input  data
+  output wire [16:0] out        // 17-bit output data
+  
+  );
+
+  wire        flag;             // determine the sign of the product
+  wire [16:0] in_17bit_b;       // store 17-bit true form data
+  wire [7:0]  in_8bit_b;        // store 8-bit  true form data
+  wire [24:0] mul;
+  wire [16:0] mul_b;
+  reg  [24:0] neg_mul;
+
+//**************************** The following are assign statements ****************************
+
+  assign  in_17bit_b = (in_17bit[16] == 1) ? ~in_17bit[16:0] + 1'b1 : in_17bit;  // If in_17bit is a negative number, transform to 2's complement, otherwise remain the same.
+
+  always @ ( in_17bit or in_8bit ) begin
+    case ( in_8bit )
+      8'b00000000: neg_mul = 25'b0;
+      8'b00110001: neg_mul = ( in_17bit_b << 0 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 5 );
+      8'b11001111: neg_mul = ( in_17bit_b << 0 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 5 );  
+      8'b01011010: neg_mul = ( in_17bit_b << 1 ) + ( in_17bit_b << 3 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 6 ); 
+      8'b10100110: neg_mul = ( in_17bit_b << 1 ) + ( in_17bit_b << 3 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 6 );  
+      8'b01110110: neg_mul = ( in_17bit_b << 1 ) + ( in_17bit_b << 2 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 5 ) + ( in_17bit_b << 6 ); 
+      8'b10001010: neg_mul = ( in_17bit_b << 1 ) + ( in_17bit_b << 2 ) + ( in_17bit_b << 4 ) + ( in_17bit_b << 5 ) + ( in_17bit_b << 6 ); 
+      8'b01111111: neg_mul = ( in_17bit_b << 7 );
+      8'b10000001: neg_mul = ( in_17bit_b << 7 );
+    endcase
+  end
+
+//  assign  in_8bit_b  = ( in_8bit[7]  == 1) ?  ~in_8bit[7:0]  + 1'b1 : in_8bit;   // If in_8bit is a negative number, transform to 2's complement, otherwise remain the same.
+  assign  flag  = in_17bit[16] + in_8bit[7];                  // Determine the sign of the product. 
+//  assign  mul   = in_17bit_b[16:0] * in_8bit_b[7:0];          // Calculate the absolute value of the product.
+  assign  mul = neg_mul;
+  assign  mul_b = {mul[23:15], mul[14:7]};                    // Shift, combining integer and fractional parts.
+  assign  out   = (flag == 1) ? ~mul_b[16:0] + 1'b1 : mul_b;  // Output only keep 17 bits.
+  
+endmodule
+module mux(
+
+  input wire        mux_flag,
+  input wire        clk,
+  input wire        rst_n,
+  input wire[135:0] data_in_1,
+  input wire[135:0] data_in_2,
+  input wire[135:0] data_in_3,
+  output reg[135:0] data_out
+
+  );
+  reg [3:0] counter;
+  reg [33:0] R1;
+  reg [33:0] R2;
+  reg [33:0] R3;
+  reg [33:0] R4;
+
+// This always part controls signal data_out. 
+  always @ ( mux_flag or data_in_1 or data_in_2) begin
+    if(counter == 2)
+      data_out <= {R4,R3,R2,R1};
+    else if ( mux_flag )
+      data_out <= data_in_1;
+    else
+      data_out <= data_in_2;
+  end
+
+// This always part controls signal counter. 
+  always @(posedge clk or negedge rst_n)begin
+    if(!rst_n)
+    counter <= 0;
+   else  
+    counter <= counter + 1;
+  end
+
+  // This always part controls signal R1. 
+  always @ ( mux_flag or data_in_1 or data_in_2) 
+    if(counter == 14)
+      R1 <= data_in_3[33:0];
+    else
+      R1 <= R1;
+
+  // This always part controls signal R2. 
+  always @ ( mux_flag or data_in_1 or data_in_2) 
+    if(counter == 15)
+      R2 <= data_in_3[33:0];
+    else
+      R2 <= R2;
+
+  // This always part controls signal R3. 
+  always @ ( mux_flag or data_in_1 or data_in_2) 
+    if(counter == 0)
+      R3 <= data_in_3[33:0];
+    else
+      R3 <= R3;
+
+  // This always part controls signal R4. 
+  always @ ( mux_flag or data_in_1 or data_in_2) 
+    if(counter == 1)
+      R4 <= data_in_3[33:0];
+    else
+      R4 <= R4;
+
+endmodule
+module p_s(
+
+  input  wire         clk,
+  input  wire         rst_n,
+  input  wire [135:0] data_in_3,
+  input  wire         p_s_flag_in,
+  output reg  [33:0]  data_out_3
+
+  );
+
+  reg [33:0] R0;
+  reg [33:0] R1;
+  reg [33:0] R2;
+  reg [33:0] R3;
+  reg [33:0] R4;
+  reg [33:0] R5;
+  reg [33:0] R6;
+  reg [33:0] R7;
+  reg [33:0] R8;
+  reg [33:0] R9;
+  reg [33:0] R10;
+  reg [33:0] R11;
+  reg [33:0] R12;
+  reg [33:0] R13;
+  reg [33:0] R14;
+  reg [33:0] R15;
+
+  reg [1:0]  counter_1;
+  reg [3:0]  counter_2;
+  reg        p_s_flag_out;
+
+// This always part controls signal counter_1. 
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      counter_1 <= 2'b0;
+    else if ( counter_1 == 2'b11 )
+      counter_1 <= 2'b0;
+    else
+      counter_1 <= counter_1 + 2'b01;
+  end
+
+// This always part controls registers. 
+  always @ ( posedge clk ) begin
+    if ( !p_s_flag_in ) begin
+      case ( counter_1 )
+        2'b10: begin
+          R0  <= data_in_3[33:0];
+          R4  <= data_in_3[67:34];
+          R8  <= data_in_3[101:68];
+          R12 <= data_in_3[135:102];
+      end
+      2'b11: begin
+          R1  <= data_in_3[33:0];
+          R5  <= data_in_3[67:34];
+          R9  <= data_in_3[101:68];
+          R13 <= data_in_3[135:102];
+      end
+      2'b00: begin
+          R2  <= data_in_3[33:0];
+          R6  <= data_in_3[67:34];
+          R10 <= data_in_3[101:68];
+          R14 <= data_in_3[135:102];
+      end
+      2'b01: begin
+          R3  <= data_in_3[33:0];
+          R7  <= data_in_3[67:34];
+          R11 <= data_in_3[101:68];
+          R15 <= data_in_3[135:102];
+      end
+      endcase
+    end
+  end
+
+// This always part controls signal counter_2. 
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      counter_2 <= 4'b0;
+    else if ( counter_2 == 4'b1111 )
+      counter_2 <= 4'b0;
+    else
+      counter_2 <= counter_2 + 4'b0001;
+  end
+
+// This always part controls p_s_flag_out. 
+  always @ ( posedge clk or negedge rst_n ) begin
+     if ( !rst_n )
+      p_s_flag_out <= 1'b0;
+     else if ( !p_s_flag_in ) 
+      p_s_flag_out <= 1'b1;
+     else
+      p_s_flag_out <= p_s_flag_out;
+  end
+
+// This always part controls data_out_3.          
+  always @ ( posedge clk ) begin
+    if ( p_s_flag_out ) begin
+      case( counter_2 )
+        4'b0000: data_out_3 <= R13;
+        4'b0001: data_out_3 <= R14;
+        4'b0010: data_out_3 <= R15;
+        4'b0011: data_out_3 <= R0;
+        4'b0100: data_out_3 <= R1;
+        4'b0101: data_out_3 <= R2;
+        4'b0110: data_out_3 <= R3;
+        4'b0111: data_out_3 <= R4;
+        4'b1000: data_out_3 <= R5;
+        4'b1001: data_out_3 <= R6;
+        4'b1010: data_out_3 <= R7;
+        4'b1011: data_out_3 <= R8;
+        4'b1100: data_out_3 <= R9;
+        4'b1101: data_out_3 <= R10;
+        4'b1110: data_out_3 <= R11;
+        4'b1111: data_out_3 <= R12;
+      endcase
+    end
+  end
+   
+endmodule
+module reg1(
+
+  input  wire         clk,
+  input  wire         rst_n,
+  input  wire [135:0] data_in_2,        // The data from butterfly (or structurally, from DEMUX)
+  input  wire         reg_datain_flag,  // control the input
+  output reg  [135:0] data_out_2        // The data to MUX
+
+  );
+
+  reg reg_flag_mux;  // control the output
+
+  reg [33:0] R0;
+  reg [33:0] R1;
+  reg [33:0] R2;
+  reg [33:0] R3;
+  reg [33:0] R4;
+  reg [33:0] R5;
+  reg [33:0] R6;
+  reg [33:0] R7;
+  reg [33:0] R8;
+  reg [33:0] R9;
+  reg [33:0] R10;
+  reg [33:0] R11;
+  reg [33:0] R12;
+  reg [33:0] R13;
+  reg [33:0] R14;
+  reg [33:0] R15;
+  
+  reg [1:0] counter1;
+  reg [1:0] counter2;
+
+// This always part controls signal counter1. 
+  always @ ( posedge clk ) begin
+    if ( !rst_n )
+      counter1 <= 2'b00;
+    else if ( reg_datain_flag )
+      counter1 <= counter1 + 1'b1;
+  end
+
+// This always part controls registers. 
+  always @ ( posedge clk ) begin
+    if ( reg_datain_flag )begin
+      case ( counter1 )
+        2'b01: begin
+          R0  <= data_in_2[33:0];
+          R1  <= data_in_2[67:34];
+          R2  <= data_in_2[101:68];
+          R3  <= data_in_2[135:102];
+        end
+        2'b10: begin
+          R4  <= data_in_2[33:0];
+          R5  <= data_in_2[67:34];
+          R6  <= data_in_2[101:68];
+          R7  <= data_in_2[135:102];
+        end
+        2'b11: begin
+          R8  <= data_in_2[33:0];
+          R9  <= data_in_2[67:34];
+          R10 <= data_in_2[101:68];
+          R11 <= data_in_2[135:102];
+        end
+        2'b00: begin
+          R12 <= data_in_2[33:0];
+          R13 <= data_in_2[67:34];
+          R14 <= data_in_2[101:68];
+          R15 <= data_in_2[135:102];
+        end
+      endcase
+    end
+  end
+
+// This always part controls signal reg_flag_mux. 
+  always @ ( posedge clk ) begin
+    if ( !rst_n )
+      reg_flag_mux <= 1'b0;
+
+    else if ( counter1 == 2'b11 )
+      reg_flag_mux <= 1'b1;
+
+    else if ( counter2 == 2'b11 )
+      reg_flag_mux <= 1'b0;
+  end
+  
+// This always part controls signal counter2. 
+  always @ ( posedge clk ) begin
+    if ( !rst_n )
+      counter2 <= 2'b00;
+
+    else if ( reg_flag_mux )
+      counter2 <= counter2 + 2'b01;
+  end
+
+// This always part controls signal data_out_2. 
+  always @ ( posedge clk ) begin
+    if ( reg_flag_mux ) begin
+      case ( counter2 )
+        2'b00: data_out_2 <= {R12,  R8,  R4,  R0};
+        2'b01: data_out_2 <= {R13,  R9,  R5,  R1};
+        2'b10: data_out_2 <= {R14,  R10, R6,  R2};
+        2'b11: data_out_2 <= {R15,  R11, R7,  R3};
+    endcase
+    end
+  end
+
+endmodule
+module s_p(
+
+  input  wire         clk,
+  input  wire         rst_n,
+  input  wire [33:0]  data_in_1,
+  output reg  [135:0] data_out_1,
+  output reg          s_p_flag_out
+
+  );
+
+  reg [33:0] R0;
+  reg [33:0] R1;
+  reg [33:0] R2;
+  reg [33:0] R3;
+  reg [33:0] R4;
+  reg [33:0] R5;
+  reg [33:0] R6;
+  reg [33:0] R7;
+  reg [33:0] R8;
+  reg [33:0] R9;
+  reg [33:0] R10;
+  reg [33:0] R11;
+  reg [33:0] R12;
+  reg [33:0] R13;
+  reg [33:0] R14;
+  reg [33:0] R15;
+
+  reg [3:0]  counter;
+  reg        s_p_flag_mux;
+
+// This always part controls signal counter. 
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      counter <= 4'b0;
+    else if (counter == 4'b1111)
+      counter <= 4'b0;
+    else
+      counter <= counter + 4'b0001;
+  end
+
+// This always part controls signal s_p_flag_out. 
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      s_p_flag_out <= 0;
+    else if (counter == 4'b1100)
+      s_p_flag_out <= 1'b1;
+    else
+      s_p_flag_out <= 1'b0;
+  end
+
+// This always part controls signal s_p_flag_mux.
+  always @ ( posedge clk or negedge rst_n ) begin
+    if ( !rst_n )
+      s_p_flag_mux <= 0;
+    else begin
+      case ( counter )
+        4'b0000: s_p_flag_mux <= 1'b1;
+        4'b1101: s_p_flag_mux <= 1'b1;
+        4'b1110: s_p_flag_mux <= 1'b1;
+        4'b1111: s_p_flag_mux <= 1'b1;
+        default: s_p_flag_mux <= 1'b0;
+      endcase
+    end
+  end
+
+// This always part controls signal data_in_1.
+  always @ ( posedge clk or negedge rst_n ) begin
+    case ( counter )
+      4'b0000: data_out_1  = {R15,  R11, R7,  R3};
+      4'b1101: data_out_1  = {R12,  R8,  R4,  R0};
+      4'b1110: data_out_1  = {R13,  R9,  R5,  R1};
+      4'b1111: data_out_1  = {R14,  R10, R6,  R2};
+    endcase
+end
+
+// This always part controls register.
+  always @(posedge clk or negedge rst_n)begin
+    case(counter)
+      4'b0000: R0  <= data_in_1;
+      4'b0001: R1  <= data_in_1;
+      4'b0010: R2  <= data_in_1;
+      4'b0011: R3  <= data_in_1;
+      4'b0100: R4  <= data_in_1;
+      4'b0101: R5  <= data_in_1;
+      4'b0110: R6  <= data_in_1;
+      4'b0111: R7  <= data_in_1;
+      4'b1000: R8  <= data_in_1;
+      4'b1001: R9  <= data_in_1;
+      4'b1010: R10 <= data_in_1;
+      4'b1011: R11 <= data_in_1;
+      4'b1100: R12 <= data_in_1;
+      4'b1101: R13 <= data_in_1;
+      4'b1110: R14 <= data_in_1;
+      4'b1111: R15 <= data_in_1;
+    endcase
+  end
+  
+endmodule
+module testbench();
+
+  reg         clk;
+  reg         rst_n;
+  reg  [33:0] InputData [0:47];
+  reg  [5:0]  i;
+  reg  [33:0] data_in;
+  wire [33:0] data_out;
+
+  initial begin
+    clk = 1'b0;
+    forever #4 clk = ~clk;
+  end
+
+  initial begin
+    rst_n = 1'b0;
+    $display("\nLoad Data\n");  
+    $readmemb("C:\Users\Admin\OneDrive\Desktop\vivado\vidyut_fft\Data_inp.txt", InputData); // Need to modify.
+
+    #8 begin
+      rst_n = 1'b1;
+      for (i = 0; i < 47; i = i + 1) begin
+        data_in = InputData[i];
+        #8
+        $display("[%d] %b_%b_%b %b_%b_%b\n", (i+13)%16, data_out[33], data_out[32:25], data_out[24:17], data_out[16], data_out[15:8], data_out[7:0]);
+      end 
+    end
+  end
+
+  fft fft0(.clk(clk), 
+          .rst_n(rst_n), 
+          .data_in(data_in), 
+          .data_out(data_out)
+          );
+
+endmodule
+module butterfly_tb();
+
+  reg          clk_test;
+  reg          rst_n_test;
+  reg  [135:0] calc_in_test;
+  reg  [2:0]   rotation_test;
+  wire [135:0] calc_out_test;
+
+  reg  [135:0] temp1, temp2, temp3, temp4;
+
+  parameter clk_freq = 10;  // or 8 for 125 MHz
+
+  butterfly butterfly0(.calc_in(calc_in_test),
+                       .rotation(rotation_test),
+                       .calc_out(calc_out_test)
+  );
+
+  initial begin
+    clk_test = 0;
+    rst_n_test = 0;
+    calc_in_test = 135'b0;
+    rotation_test = 3'b0;
+  end
+
+  always begin
+      #(clk_freq / 2) clk_test = ~ clk_test;	// create a 100 MHz clock
+      rst_n_test = 1;  // enable
+  end
+
+  initial begin
+//********************************* The following is the 16 inputs *******************************
+    $display("\n\nLoad Data\n");
+    #10 begin
+      calc_in_test = 136'b0000000010000000000000000000000000000000001000000000000000000000000000000001100000000000000000000000000000000010000000000000000000000000;
+      //                  |   x[12]Real   ||   x[12]Imag   ||    x[8]Real   ||    x[8]Imag   ||    x[4]Real   ||    x[4]Imag   ||    x[0]Real   ||   x[0]Imag    |
+      rotation_test = 3'b000;
+    end
+
+    #10 temp1 = calc_out_test;
+
+    #10 begin
+      calc_in_test = 136'b0000000010000000000000000000000000000000010000000000000001000000000000000001000000000000000100000000000000000000000000000000000000000000;
+      //                  |   x[13]Real   ||   x[13]Imag   ||    x[9]Real   ||    x[9]Imag   ||    x[5]Real   ||    x[5]Imag   ||    x[1]Real   ||   x[1]Imag    |
+      rotation_test = 3'b001;
+    end
+
+    #10 temp2 = calc_out_test;
+
+    #10 begin
+      calc_in_test = 136'b0000000010000000000000000000000000000000001000000000000000000000000000000000100000000000001000000000000000000010000000000000000000000000;
+      //                  |   x[14]Real   ||   x[14]Imag   ||    x[10]Real  ||    x[10]Imag  ||    x[6]Real   ||    x[6]Imag   ||    x[2]Real   ||   x[2]Imag    |
+      rotation_test = 3'b010;
+    end
+
+    #10 temp3 = calc_out_test;
+
+    #10 begin
+      calc_in_test = 136'b0000000010000000000000000000000000000000000000000000000000000000000000000001000000000000000010000000000000000000000000000000000000000000;
+    //                    |   x[15]Real   ||    x[15]Imag  ||    x[11]Real  ||    x[11]Imag  ||    x[7]Real   ||    x[7]Imag   ||    x[3]Real   ||   x[3]Imag    |
+      rotation_test = 3'b011;
+    end
+
+    #10 temp4 = calc_out_test;
+
+//************************************ The following is stage 2 **********************************
+    $display("\n\nOUTPUT\n");
+
+    #10 begin
+      calc_in_test = {temp4[33:0], temp3[33:0], temp2[33:0], temp1[33:0]};
+      rotation_test = 3'b100;
+    end
+
+    #10 begin
+      $display("[0]  %b_%b_%b %b_%b_%b\n", calc_out_test[33],  calc_out_test[32:25],   calc_out_test[24:17],   calc_out_test[16],  calc_out_test[15:8],    calc_out_test[7:0]);
+      $display("[4]  %b_%b_%b %b_%b_%b\n", calc_out_test[67],  calc_out_test[66:59],   calc_out_test[58:51],   calc_out_test[50],  calc_out_test[49:42],   calc_out_test[41:34]);
+      $display("[8]  %b_%b_%b %b_%b_%b\n", calc_out_test[101], calc_out_test[100:93],  calc_out_test[92:85],   calc_out_test[84],  calc_out_test[83:76],   calc_out_test[75:68]);
+      $display("[12] %b_%b_%b %b_%b_%b\n", calc_out_test[135], calc_out_test[134:127], calc_out_test[126:119], calc_out_test[118], calc_out_test[117:110], calc_out_test[109:102]);
+    end
+
+    #10 begin
+      calc_in_test = {temp4[67:34], temp3[67:34], temp2[67:34], temp1[67:34]};
+      rotation_test = 3'b101;
+    end
+    
+    #10 begin
+      $display("[1]  %b_%b_%b %b_%b_%b\n", calc_out_test[33],  calc_out_test[32:25],   calc_out_test[24:17],   calc_out_test[16],  calc_out_test[15:8],    calc_out_test[7:0]);
+      $display("[5]  %b_%b_%b %b_%b_%b\n", calc_out_test[67],  calc_out_test[66:59],   calc_out_test[58:51],   calc_out_test[50],  calc_out_test[49:42],   calc_out_test[41:34]);
+      $display("[9]  %b_%b_%b %b_%b_%b\n", calc_out_test[101], calc_out_test[100:93],  calc_out_test[92:85],   calc_out_test[84],  calc_out_test[83:76],   calc_out_test[75:68]);
+      $display("[13] %b_%b_%b %b_%b_%b\n", calc_out_test[135], calc_out_test[134:127], calc_out_test[126:119], calc_out_test[118], calc_out_test[117:110], calc_out_test[109:102]);
+    end
+
+    #10 begin
+      calc_in_test = {temp4[101:68], temp3[101:68], temp2[101:68], temp1[101:68]};
+      rotation_test = 3'b110;
+    end
+    
+    #10 begin
+      $display("[2]  %b_%b_%b %b_%b_%b\n", calc_out_test[33],  calc_out_test[32:25],   calc_out_test[24:17],   calc_out_test[16],  calc_out_test[15:8],    calc_out_test[7:0]);
+      $display("[6]  %b_%b_%b %b_%b_%b\n", calc_out_test[67],  calc_out_test[66:59],   calc_out_test[58:51],   calc_out_test[50],  calc_out_test[49:42],   calc_out_test[41:34]);
+      $display("[10] %b_%b_%b %b_%b_%b\n", calc_out_test[101], calc_out_test[100:93],  calc_out_test[92:85],   calc_out_test[84],  calc_out_test[83:76],   calc_out_test[75:68]);
+      $display("[14] %b_%b_%b %b_%b_%b\n", calc_out_test[135], calc_out_test[134:127], calc_out_test[126:119], calc_out_test[118], calc_out_test[117:110], calc_out_test[109:102]);
+    end
+
+    #10 begin
+      calc_in_test = {temp4[135:102], temp3[135:102], temp2[135:102], temp1[135:102]};
+      rotation_test = 3'b111;
+    end
+    
+    #10 begin
+      $display("[3]  %b_%b_%b %b_%b_%b\n", calc_out_test[33],  calc_out_test[32:25],   calc_out_test[24:17],   calc_out_test[16],  calc_out_test[15:8],    calc_out_test[7:0]);
+      $display("[7]  %b_%b_%b %b_%b_%b\n", calc_out_test[67],  calc_out_test[66:59],   calc_out_test[58:51],   calc_out_test[50],  calc_out_test[49:42],   calc_out_test[41:34]);
+      $display("[11] %b_%b_%b %b_%b_%b\n", calc_out_test[101], calc_out_test[100:93],  calc_out_test[92:85],   calc_out_test[84],  calc_out_test[83:76],   calc_out_test[75:68]);
+      $display("[15] %b_%b_%b %b_%b_%b\n", calc_out_test[135], calc_out_test[134:127], calc_out_test[126:119], calc_out_test[118], calc_out_test[117:110], calc_out_test[109:102]);
+    end
+
+    #100 $stop; 
+      
+  end
+
+endmodule
+module multi16_tb( );
+
+  reg          clk_test;
+  reg          rst_n_test;
+  reg  [16:0]  in_17bit_test;
+  reg  [7:0]   in_8bit_test;
+  wire [16:0]  out_test;
+
+  parameter clk_freq = 10;
+
+  multi16 multi160(.in_17bit(in_17bit_test),
+                   .in_8bit(in_8bit_test),
+                   .out(out_test)
+  );
+
+  initial begin
+    clk_test = 0;
+    rst_n_test = 0;
+    in_17bit_test = 17'b0;
+    in_8bit_test = 8'b0;
+  end
+
+  always begin
+    #(clk_freq / 2) clk_test = ~ clk_test;	// create a 100MHz clock
+    rst_n_test = 1;
+  end
+
+  initial begin
+    #10 begin
+      in_17bit_test = 17'b00001000100001000;
+      in_8bit_test  = 8'b01111111;
+    end
+    
+    #100 begin
+      in_17bit_test = 17'b00000000100000000;
+      in_8bit_test  = 8'b01111111;
+    end  
+    
+  end
+
+endmodule
+
+
+
